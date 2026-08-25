@@ -1,0 +1,410 @@
+// ============================================================
+// Discord_Space_Get
+// ------------------------------------------------------------
+// Discordのテキストチャンネル（TweetShift が配信者の全ツイートを
+// 自動投稿するチャンネル）から、X(Twitter) の「スペース」配信に
+// 関するツイートのみを抜き出し、別のチャンネルへ転送する
+// Google Apps Script です。
+//
+// 検出方式:
+//   ツイート本文、または Embed 内の URL に
+//   https://x.com/i/spaces/{id}  （twitter.com も可）
+//   のリンクが含まれているものを「スペース投稿」と判定します。
+//
+// 転送方式:
+//   Discord Bot トークンで元チャンネルの履歴を読み取り
+//   （Read Message History 権限）、該当メッセージを先チャンネルへ
+//   送信（Send Messages 権限）します。
+//   先チャンネルは Webhook でも指定可能です（destWebhookUrl）。
+// ============================================================
+
+// ----- Script Properties に設定するキー -----
+// discordBotToken   : Bot トークン（"Bot " プレフィックスは不要）
+// sourceChannelId   : TweetShift 投稿元チャンネルID
+// destChannelId     : スペース転送先チャンネルID（destWebhookUrl 未設定時）
+// destWebhookUrl    : 任意。設定すると Bot 送信の代わりに Webhook 送信
+// lastMessageId     : 前回処理済みの最新メッセージID（ブックマーク・自動管理）
+// forwardedSpaceIds : 転送済みメッセージIDのキャッシュ（重複防止・自動管理）
+
+const DISCORD_API_BASE = 'https://discord.com/api/v10';
+const MAX_FETCH_LIMIT = 100;
+const MAX_FETCH_PAGES = 5;          // 1回の実行で取得するページ数上限
+const MAX_FORWARD_PER_RUN = 20;     // 1回の実行で転送する上限
+const SPACE_ID_CACHE_SIZE = 300;    // 転送済みIDキャッシュの保持件数
+const MIN_REMAINING_TIME_SEC = 15;
+
+// X スペースの URL パターン
+// x.com/i/spaces/xxxx または twitter.com/i/spaces/xxxx
+const SPACE_URL_REGEX = /https?:\/\/(?:x|twitter)\.com\/i\/spaces\/([A-Za-z0-9_-]+)/i;
+
+// ============================================================
+// 共通ユーティリティ
+// ============================================================
+
+function hasEnoughTime(bufferSeconds = MIN_REMAINING_TIME_SEC) {
+  try {
+    return ScriptApp.getRemainingTime() > bufferSeconds;
+  } catch (e) {
+    return true;
+  }
+}
+
+function getBotToken() {
+  const token = PropertiesService.getScriptProperties().getProperty('discordBotToken');
+  if (!token) {
+    throw new Error('discordBotToken が設定されていません。');
+  }
+  return token;
+}
+
+function getAuthHeaders() {
+  return {
+    'Authorization': 'Bot ' + getBotToken(),
+    'Content-Type': 'application/json'
+  };
+}
+
+function retryOperation(operation, options = {}) {
+  const maxAttempts = options.maxAttempts || 3;
+  const delayMs = options.delayMs || 500;
+  const label = options.label || '処理';
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        console.error(`${label}が${maxAttempts}回試行しましたが失敗しました: ${error.message}`);
+        throw error;
+      }
+      console.warn(`${label}が失敗しました。${attempt}/${maxAttempts}回目を再試行します: ${error.message}`);
+      Utilities.sleep(delayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
+// ============================================================
+// Discord API ラッパー
+// ============================================================
+
+// チャンネルからメッセージを取得（after 以降の新着を昇順で）
+function fetchMessages(channelId, afterId, limit) {
+  let url = `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${limit}`;
+  if (afterId) {
+    url += `&after=${afterId}`;
+  }
+
+  const response = retryOperation(() => UrlFetchApp.fetch(url, {
+    method: 'get',
+    headers: getAuthHeaders(),
+    muteHttpExceptions: true
+  }), { label: `メッセージ取得(${channelId})` });
+
+  const code = response.getResponseCode();
+  if (code !== 200) {
+    throw new Error(`メッセージ取得に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
+  }
+
+  return JSON.parse(response.getContentText());
+}
+
+// 先チャンネルへメッセージを送信（Bot 経由）
+function sendMessageToChannel(channelId, payload) {
+  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages`;
+  const response = retryOperation(() => UrlFetchApp.fetch(url, {
+    method: 'post',
+    headers: getAuthHeaders(),
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  }), { label: `メッセージ送信(${channelId})` });
+
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error(`メッセージ送信に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
+  }
+  return JSON.parse(response.getContentText());
+}
+
+// 先チャンネルへメッセージを送信（Webhook 経由）
+function sendMessageToWebhook(webhookUrl, payload) {
+  const response = retryOperation(() => UrlFetchApp.fetch(webhookUrl, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  }), { label: 'Webhook送信' });
+
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error(`Webhook送信に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
+  }
+  return JSON.parse(response.getContentText());
+}
+
+// ============================================================
+// スペース判定
+// ============================================================
+
+// メッセージからスペース情報を抽出。該当しなければ null を返す。
+function detectSpace(message) {
+  if (!message) {
+    return null;
+  }
+
+  // Bot 自身の投稿（転送後のメッセージなど）は無視してループを防ぐ
+  if (message.author && message.author.bot === true) {
+    return null;
+  }
+
+  const candidates = [];
+
+  // 1) 本文
+  if (message.content) {
+    candidates.push(message.content);
+  }
+
+  // 2) Embed 内の URL / テキスト
+  if (Array.isArray(message.embeds)) {
+    message.embeds.forEach((embed) => {
+      if (embed.url) candidates.push(embed.url);
+      if (embed.title) candidates.push(embed.title);
+      if (embed.description) candidates.push(embed.description);
+      // 画像・動画のプロキシURLにはスペースIDは含まれないが念のため
+      if (embed.author && embed.author.url) candidates.push(embed.author.url);
+    });
+  }
+
+  for (const text of candidates) {
+    if (!text) continue;
+    const match = text.match(SPACE_URL_REGEX);
+    if (match) {
+      const spaceId = match[1];
+      const spaceUrl = `https://x.com/i/spaces/${spaceId}`;
+      return {
+        spaceId: spaceId,
+        spaceUrl: spaceUrl,
+        sourceText: message.content || spaceUrl
+      };
+    }
+  }
+
+  return null;
+}
+
+// ============================================================
+// 転送済みキャッシュ管理（重複防止）
+// ============================================================
+
+function getForwardedCache() {
+  const raw = PropertiesService.getScriptProperties().getProperty('forwardedSpaceIds');
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function addForwardedCache(cache, messageId) {
+  cache.push(messageId);
+  // 古いものから削り、上限以内に保つ
+  while (cache.length > SPACE_ID_CACHE_SIZE) {
+    cache.shift();
+  }
+  PropertiesService.getScriptProperties().setProperty('forwardedSpaceIds', JSON.stringify(cache));
+}
+
+// ============================================================
+// 転送処理
+// ============================================================
+
+function forwardSpaceMessage(message, spaceInfo) {
+  const destChannelId = PropertiesService.getScriptProperties().getProperty('destChannelId');
+  const destWebhookUrl = PropertiesService.getScriptProperties().getProperty('destWebhookUrl');
+
+  if (!destWebhookUrl && !destChannelId) {
+    throw new Error('destChannelId または destWebhookUrl が設定されていません。');
+  }
+
+  // 元ツイートの本文をそのまま転送し、冒頭にラベルを付与。
+  // 空本文（Embed のみ）の場合はスペース URL を代わりに使用。
+  const originalText = (message.content && message.content.trim()) ? message.content : spaceInfo.spaceUrl;
+  const content = `🎙️ **Xスペース配信**\n${originalText}`;
+
+  const payload = {
+    content: content,
+    embeds: [
+      {
+        title: 'Xスペースを開く',
+        url: spaceInfo.spaceUrl,
+        color: 0x1da1f2
+      }
+    ]
+  };
+
+  if (destWebhookUrl) {
+    // Webhook の場合は username/avatar を引き継ぐことも可能
+    if (message.author && message.author.username) {
+      payload.username = message.author.username;
+    }
+    sendMessageToWebhook(destWebhookUrl, payload);
+  } else {
+    sendMessageToChannel(destChannelId, payload);
+  }
+}
+
+// ============================================================
+// メイン処理
+// ============================================================
+
+function processNewSpaceMessages() {
+  const sourceChannelId = PropertiesService.getScriptProperties().getProperty('sourceChannelId');
+  if (!sourceChannelId) {
+    throw new Error('sourceChannelId が設定されていません。');
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  const lastMessageId = props.getProperty('lastMessageId');
+  const forwardedCache = getForwardedCache();
+
+  // 初回実行（ブックマーク未設定）: 履歴を転送せず最新位置だけ覚える
+  if (!lastMessageId) {
+    console.log('初回実行のため、現在の最新メッセージをブックマークします（履歴は転送しません）。');
+    const initial = fetchMessages(sourceChannelId, null, 1);
+    if (Array.isArray(initial) && initial.length > 0) {
+      props.setProperty('lastMessageId', String(initial[0].id));
+      console.log(`ブックマークを設定しました: ${initial[0].id}`);
+    } else {
+      console.log('メッセージが存在しないためブックマークを設定しませんでした。');
+    }
+    return;
+  }
+
+  let afterId = lastMessageId;
+  let newestId = lastMessageId;
+  let forwardCount = 0;
+  let processedAny = false;
+
+  for (let page = 0; page < MAX_FETCH_PAGES; page++) {
+    if (!hasEnoughTime(10)) {
+      console.warn('残り実行時間が少ないため、取得を中断します。');
+      break;
+    }
+
+    const messages = fetchMessages(sourceChannelId, afterId, MAX_FETCH_LIMIT);
+    if (!Array.isArray(messages) || messages.length === 0) {
+      break;
+    }
+
+    // 昇順で返るため、最後の要素がそのページの最新
+    newestId = String(messages[messages.length - 1].id);
+
+    for (const message of messages) {
+      if (!hasEnoughTime(8)) {
+        console.warn('残り実行時間が少ないため、メッセージ処理を中断します。');
+        page = MAX_FETCH_PAGES; // 外側ループも抜ける
+        break;
+      }
+
+      processedAny = true;
+      const msgId = String(message.id);
+
+      const spaceInfo = detectSpace(message);
+      if (!spaceInfo) {
+        continue;
+      }
+
+      if (forwardedCache.includes(msgId)) {
+        console.log(`メッセージ ${msgId} は転送済みのためスキップします。`);
+        continue;
+      }
+
+      if (forwardCount >= MAX_FORWARD_PER_RUN) {
+        console.log(`転送上限（${MAX_FORWARD_PER_RUN}件）に達したため、残りは次回へ持ち越します。`);
+        page = MAX_FETCH_PAGES;
+        break;
+      }
+
+      try {
+        forwardSpaceMessage(message, spaceInfo);
+        addForwardedCache(forwardedCache, msgId);
+        forwardCount++;
+        console.log(`スペースを転送しました: ${spaceInfo.spaceUrl}（メッセージ ${msgId}）`);
+        Utilities.sleep(400);
+      } catch (error) {
+        console.error(`スペース転送中にエラーが発生しました（メッセージ ${msgId}）: ${error.message}`);
+      }
+    }
+
+    // 取得件数が上限未満ならこれ以上新着はない
+    if (messages.length < MAX_FETCH_LIMIT) {
+      break;
+    }
+    afterId = newestId;
+  }
+
+  // ブックマークを最新位置へ進める（処理したかどうかに関わらず）
+  if (newestId !== lastMessageId) {
+    props.setProperty('lastMessageId', newestId);
+    console.log(`ブックマークを更新しました: ${lastMessageId} -> ${newestId}`);
+  }
+
+  console.log(`完了: 新規転送 ${forwardCount} 件（処理済み新着: ${processedAny ? 'あり' : 'なし'}）。`);
+}
+
+// ============================================================
+// 実行エントリポイント（時間主導トリガーに設定）
+// ============================================================
+
+function runDiscordSpaceGet() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    console.log('スクリプトは既に実行中です。');
+    return;
+  }
+  try {
+    processNewSpaceMessages();
+  } catch (e) {
+    console.error('エラーが発生しました: ' + e.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ============================================================
+// 手動操作・管理用
+// ============================================================
+
+// ブックマークをリセット（次回実行で最新位置のみ再設定）
+function resetBookmark() {
+  PropertiesService.getScriptProperties().deleteProperty('lastMessageId');
+  console.log('ブックマーク（lastMessageId）をリセットしました。');
+}
+
+// 転送済みキャッシュをクリア
+function clearForwardedCache() {
+  PropertiesService.getScriptProperties().deleteProperty('forwardedSpaceIds');
+  console.log('転送済みキャッシュをクリアしました。');
+}
+
+// 手動で直近 N 件をテスト転送（ブックマークは変更しない）
+function dryRunRecent(count = 10) {
+  const sourceChannelId = PropertiesService.getScriptProperties().getProperty('sourceChannelId');
+  if (!sourceChannelId) {
+    throw new Error('sourceChannelId が設定されていません。');
+  }
+  const messages = fetchMessages(sourceChannelId, null, count);
+  let found = 0;
+  messages.forEach((m) => {
+    const info = detectSpace(m);
+    if (info) {
+      found++;
+      console.log(`[スペース検出] ${info.spaceUrl} | 本文: ${(m.content || '').slice(0, 80)}`);
+    }
+  });
+  console.log(`直近 ${messages.length} 件中、スペース投稿は ${found} 件でした（転送は行いません）。`);
+}
