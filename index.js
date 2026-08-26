@@ -7,7 +7,7 @@ const MAX_FORWARD_PER_RUN = 20;
 const SPACE_ID_CACHE_SIZE = 300;
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
-const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const CONFIG_PATH = path.join(__dirname, 'config.json');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 
 const discordToken = process.env.DISCORD_BOT_TOKEN;
