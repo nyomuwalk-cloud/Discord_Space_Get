@@ -1,7 +1,7 @@
 {
   "name": "discord-space-get",
   "version": "1.0.0",
-  "description": "Discord Bot to forward X(Twitter) Space tweets to another channel",
+  "description": "Discord Bot to forward X(Twitter) Space tweets to another channel - rebuild",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
