@@ -135,8 +135,13 @@ async function processMessage(message) {
 
       if (row.destWebhookUrl) {
         payload.content = content;
-        payload.username = message.author.username;
-        payload.avatarURL = message.author.displayAvatarURL();
+        if (row.twitterUsername) {
+          payload.username = row.twitterUsername;
+          payload.avatarURL = `https://unavatar.io/x/${row.twitterUsername}`;
+        } else {
+          payload.username = message.author.username;
+          payload.avatarURL = message.author.displayAvatarURL();
+        }
         await sendWebhook(row.destWebhookUrl, payload);
       } else {
         await sendChannel(row.destChannelId, {
