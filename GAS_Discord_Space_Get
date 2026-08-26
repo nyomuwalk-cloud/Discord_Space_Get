@@ -15,27 +15,18 @@
 //   Discord Bot トークンで元チャンネルの履歴を読み取り
 //   （Read Message History 権限）、該当メッセージを先チャンネルへ
 //   送信（Send Messages 権限）します。
-//   先チャンネルは Webhook でも指定可能です（destWebhookUrl）。
+//   先チャンネルは Webhook でも指定可能です（PROP_DEST_WEBHOOK_URL）。
 // ============================================================
 
 // ----- Script Properties に設定するキー -----
-// discordBotToken   : Bot トークン（"Bot " プレフィックスは不要）
-// sourceChannelId   : TweetShift 投稿元チャンネルID
-// destChannelId     : スペース転送先チャンネルID（destWebhookUrl 未設定時）
-// destWebhookUrl    : 任意。設定すると Bot 送信の代わりに Webhook 送信
-// lastMessageId     : 前回処理済みの最新メッセージID（ブックマーク・自動管理）
-// forwardedSpaceIds : 転送済みメッセージIDのキャッシュ（重複防止・自動管理）
+// PROP_DISCORD_BOT_TOKEN   : Bot トークン（"Bot " プレフィックスは不要）
+// PROP_SOURCE_CHANNEL_ID   : TweetShift 投稿元チャンネルID
+// PROP_DEST_CHANNEL_ID     : スペース転送先チャンネルID（PROP_DEST_WEBHOOK_URL 未設定時）
+// PROP_DEST_WEBHOOK_URL    : 任意。設定すると Bot 送信の代わりに Webhook 送信
+// PROP_LAST_MESSAGE_ID     : 前回処理済みの最新メッセージID（ブックマーク・自動管理）
+// PROP_FORWARDED_SPACE_IDS : 転送済みメッセージIDのキャッシュ（重複防止・自動管理）
 
-const DISCORD_API_BASE = 'https://discord.com/api/v10';
-const MAX_FETCH_LIMIT = 100;
-const MAX_FETCH_PAGES = 5;          // 1回の実行で取得するページ数上限
-const MAX_FORWARD_PER_RUN = 20;     // 1回の実行で転送する上限
-const SPACE_ID_CACHE_SIZE = 300;    // 転送済みIDキャッシュの保持件数
-const MIN_REMAINING_TIME_SEC = 15;
-
-// X スペースの URL パターン
-// x.com/i/spaces/xxxx または twitter.com/i/spaces/xxxx
-const SPACE_URL_REGEX = /https?:\/\/(?:x|twitter)\.com\/i\/spaces\/([A-Za-z0-9_-]+)/i;
+// X スペースの URL パターンは Const.gs で定義
 
 // ============================================================
 // 共通ユーティリティ
@@ -50,9 +41,9 @@ function hasEnoughTime(bufferSeconds = MIN_REMAINING_TIME_SEC) {
 }
 
 function getBotToken() {
-  const token = PropertiesService.getScriptProperties().getProperty('discordBotToken');
+  const token = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD_BOT_TOKEN);
   if (!token) {
-    throw new Error('discordBotToken が設定されていません。');
+    throw new Error(PROP_DISCORD_BOT_TOKEN + ' が設定されていません。');
   }
   return token;
 }
@@ -108,23 +99,6 @@ function fetchMessages(channelId, afterId, limit) {
     throw new Error(`メッセージ取得に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
   }
 
-  return JSON.parse(response.getContentText());
-}
-
-// 先チャンネルへメッセージを送信（Bot 経由）
-function sendMessageToChannel(channelId, payload) {
-  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages`;
-  const response = retryOperation(() => UrlFetchApp.fetch(url, {
-    method: 'post',
-    headers: getAuthHeaders(),
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  }), { label: `メッセージ送信(${channelId})` });
-
-  const code = response.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error(`メッセージ送信に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
-  }
   return JSON.parse(response.getContentText());
 }
 
@@ -199,7 +173,7 @@ function detectSpace(message) {
 // ============================================================
 
 function getForwardedCache() {
-  const raw = PropertiesService.getScriptProperties().getProperty('forwardedSpaceIds');
+  const raw = PropertiesService.getScriptProperties().getProperty(PROP_FORWARDED_SPACE_IDS);
   if (!raw) return [];
   try {
     const arr = JSON.parse(raw);
@@ -215,23 +189,14 @@ function addForwardedCache(cache, messageId) {
   while (cache.length > SPACE_ID_CACHE_SIZE) {
     cache.shift();
   }
-  PropertiesService.getScriptProperties().setProperty('forwardedSpaceIds', JSON.stringify(cache));
+  PropertiesService.getScriptProperties().setProperty(PROP_FORWARDED_SPACE_IDS, JSON.stringify(cache));
 }
 
 // ============================================================
 // 転送処理
 // ============================================================
 
-function forwardSpaceMessage(message, spaceInfo) {
-  const destChannelId = PropertiesService.getScriptProperties().getProperty('destChannelId');
-  const destWebhookUrl = PropertiesService.getScriptProperties().getProperty('destWebhookUrl');
-
-  if (!destWebhookUrl && !destChannelId) {
-    throw new Error('destChannelId または destWebhookUrl が設定されていません。');
-  }
-
-  // 元ツイートの本文をそのまま転送し、冒頭にラベルを付与。
-  // 空本文（Embed のみ）の場合はスペース URL を代わりに使用。
+function forwardSpaceMessage(message, spaceInfo, destWebhookUrl) {
   const originalText = (message.content && message.content.trim()) ? message.content : spaceInfo.spaceUrl;
   const content = `🎙️ **Xスペース配信**\n${originalText}`;
 
@@ -246,48 +211,21 @@ function forwardSpaceMessage(message, spaceInfo) {
     ]
   };
 
-  if (destWebhookUrl) {
-    // Webhook の場合は username/avatar を引き継ぐことも可能
-    if (message.author && message.author.username) {
-      payload.username = message.author.username;
-    }
-    sendMessageToWebhook(destWebhookUrl, payload);
-  } else {
-    sendMessageToChannel(destChannelId, payload);
+  if (message.author && message.author.username) {
+    payload.username = message.author.username;
   }
+  sendMessageToWebhook(destWebhookUrl, payload);
 }
 
 // ============================================================
 // メイン処理
 // ============================================================
 
-function processNewSpaceMessages() {
-  const sourceChannelId = PropertiesService.getScriptProperties().getProperty('sourceChannelId');
-  if (!sourceChannelId) {
-    throw new Error('sourceChannelId が設定されていません。');
-  }
-
-  const props = PropertiesService.getScriptProperties();
-  const lastMessageId = props.getProperty('lastMessageId');
-  const forwardedCache = getForwardedCache();
-
-  // 初回実行（ブックマーク未設定）: 履歴を転送せず最新位置だけ覚える
-  if (!lastMessageId) {
-    console.log('初回実行のため、現在の最新メッセージをブックマークします（履歴は転送しません）。');
-    const initial = fetchMessages(sourceChannelId, null, 1);
-    if (Array.isArray(initial) && initial.length > 0) {
-      props.setProperty('lastMessageId', String(initial[0].id));
-      console.log(`ブックマークを設定しました: ${initial[0].id}`);
-    } else {
-      console.log('メッセージが存在しないためブックマークを設定しませんでした。');
-    }
-    return;
-  }
-
+// 1行の設定を処理
+function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwardCount, forwardedCache) {
   let afterId = lastMessageId;
-  let newestId = lastMessageId;
-  let forwardCount = 0;
-  let processedAny = false;
+  let rowNewestId = lastMessageId;
+  let rowForwardCount = forwardCount;
 
   for (let page = 0; page < MAX_FETCH_PAGES; page++) {
     if (!hasEnoughTime(10)) {
@@ -300,17 +238,15 @@ function processNewSpaceMessages() {
       break;
     }
 
-    // 昇順で返るため、最後の要素がそのページの最新
-    newestId = String(messages[messages.length - 1].id);
+    rowNewestId = String(messages[messages.length - 1].id);
 
     for (const message of messages) {
       if (!hasEnoughTime(8)) {
         console.warn('残り実行時間が少ないため、メッセージ処理を中断します。');
-        page = MAX_FETCH_PAGES; // 外側ループも抜ける
+        page = MAX_FETCH_PAGES;
         break;
       }
 
-      processedAny = true;
       const msgId = String(message.id);
 
       const spaceInfo = detectSpace(message);
@@ -323,16 +259,16 @@ function processNewSpaceMessages() {
         continue;
       }
 
-      if (forwardCount >= MAX_FORWARD_PER_RUN) {
+      if (rowForwardCount >= MAX_FORWARD_PER_RUN) {
         console.log(`転送上限（${MAX_FORWARD_PER_RUN}件）に達したため、残りは次回へ持ち越します。`);
         page = MAX_FETCH_PAGES;
         break;
       }
 
       try {
-        forwardSpaceMessage(message, spaceInfo);
+        forwardSpaceMessage(message, spaceInfo, destWebhookUrl);
         addForwardedCache(forwardedCache, msgId);
-        forwardCount++;
+        rowForwardCount++;
         console.log(`スペースを転送しました: ${spaceInfo.spaceUrl}（メッセージ ${msgId}）`);
         Utilities.sleep(400);
       } catch (error) {
@@ -340,21 +276,83 @@ function processNewSpaceMessages() {
       }
     }
 
-    // 取得件数が上限未満ならこれ以上新着はない
     if (messages.length < MAX_FETCH_LIMIT) {
       break;
     }
-    afterId = newestId;
+    afterId = rowNewestId;
   }
 
-  // ブックマークを最新位置へ進める（処理したかどうかに関わらず）
-  if (newestId !== lastMessageId) {
-    props.setProperty('lastMessageId', newestId);
-    console.log(`ブックマークを更新しました: ${lastMessageId} -> ${newestId}`);
-  }
-
-  console.log(`完了: 新規転送 ${forwardCount} 件（処理済み新着: ${processedAny ? 'あり' : 'なし'}）。`);
+  return {
+    newestId: rowNewestId !== lastMessageId ? rowNewestId : lastMessageId,
+    forwardCount: rowForwardCount
+  };
 }
+
+function processNewSpaceMessages() {
+  const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('シート「' + CONFIG_SHEET_NAME + '」が見つかりません。');
+  }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) {
+    console.warn('有効な設定がありません。スプレッドシートを確認してください。');
+    return;
+  }
+
+  const forwardedCache = getForwardedCache();
+  let totalForwardCount = 0;
+  let processedAny = false;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = {};
+    CONFIG_HEADERS.forEach((header, index) => {
+      row[header] = data[i][index];
+    });
+
+    if (!row.enabled) {
+      continue;
+    }
+    if (!row.sourceChannelId || !row.destWebhookUrl) {
+      console.warn(`行${i + 1}: 無効な設定をスキップします。`);
+      continue;
+    }
+
+    processedAny = true;
+    const sourceChannelId = String(row.sourceChannelId);
+    const destWebhookUrl = String(row.destWebhookUrl);
+    const rowLastMessageId = row.lastMessageId ? String(row.lastMessageId) : '';
+
+    console.log(`行${i + 1}を処理中: ${sourceChannelId} -> ${destWebhookUrl}`);
+
+    let newestId = rowLastMessageId;
+    if (!newestId) {
+      console.log(`行${i + 1}: 初回実行のため、現在の最新メッセージをブックマークします。`);
+      const initial = fetchMessages(sourceChannelId, null, 1);
+      if (Array.isArray(initial) && initial.length > 0) {
+        newestId = String(initial[0].id);
+        sheet.getRange(i + 1, 6).setValue(newestId);
+        console.log(`行${i + 1}のブックマークを設定しました: ${newestId}`);
+      } else {
+        console.log(`行${i + 1}: メッセージが存在しないためブックマークを設定しませんでした。`);
+        continue;
+      }
+    }
+
+    const result = processConfigRow(sourceChannelId, destWebhookUrl, newestId, totalForwardCount, forwardedCache);
+    totalForwardCount = result.forwardCount;
+
+    if (result.newestId && result.newestId !== newestId) {
+      sheet.getRange(i + 1, 6).setValue(result.newestId);
+      console.log(`行${i + 1}のブックマークを更新しました: ${newestId} -> ${result.newestId}`);
+    }
+  }
+
+  console.log(`完了: 新規転送 ${totalForwardCount} 件（処理済み新着: ${processedAny ? 'あり' : 'なし'}）。`);
+}
+
 
 // ============================================================
 // 実行エントリポイント（時間主導トリガーに設定）
@@ -381,22 +379,37 @@ function runDiscordSpaceGet() {
 
 // ブックマークをリセット（次回実行で最新位置のみ再設定）
 function resetBookmark() {
-  PropertiesService.getScriptProperties().deleteProperty('lastMessageId');
-  console.log('ブックマーク（lastMessageId）をリセットしました。');
+  const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('シート「' + CONFIG_SHEET_NAME + '」が見つかりません。');
+  }
+
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    sheet.getRange(i + 1, 6).clearContent();
+  }
+  console.log('全行のブックマーク（F列）をリセットしました。');
 }
 
 // 転送済みキャッシュをクリア
 function clearForwardedCache() {
-  PropertiesService.getScriptProperties().deleteProperty('forwardedSpaceIds');
+  PropertiesService.getScriptProperties().deleteProperty(PROP_FORWARDED_SPACE_IDS);
   console.log('転送済みキャッシュをクリアしました。');
 }
 
 // 手動で直近 N 件をテスト転送（ブックマークは変更しない）
 function dryRunRecent(count = 10) {
-  const sourceChannelId = PropertiesService.getScriptProperties().getProperty('sourceChannelId');
-  if (!sourceChannelId) {
+  const rows = getConfigRows();
+  if (!rows.length) {
+    throw new Error('有効な設定がありません。スプレッドシートを確認してください。');
+  }
+  const row = rows.find(r => r.enabled) || rows[0];
+  if (!row.sourceChannelId) {
     throw new Error('sourceChannelId が設定されていません。');
   }
+  const sourceChannelId = String(row.sourceChannelId);
   const messages = fetchMessages(sourceChannelId, null, count);
   let found = 0;
   messages.forEach((m) => {
@@ -407,4 +420,86 @@ function dryRunRecent(count = 10) {
     }
   });
   console.log(`直近 ${messages.length} 件中、スペース投稿は ${found} 件でした（転送は行いません）。`);
+}
+
+// チャンネルへのアクセス権をテスト
+function testChannelAccess() {
+  const rows = getConfigRows();
+  if (!rows.length) {
+    throw new Error('有効な設定がありません。スプレッドシートを確認してください。');
+  }
+  const row = rows.find(r => r.enabled) || rows[0];
+  if (!row.sourceChannelId) {
+    throw new Error('sourceChannelId が設定されていません。');
+  }
+  const channelId = String(row.sourceChannelId);
+  console.log(`アクセス対象チャンネルID: ${channelId}`);
+  
+  const token = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD_BOT_TOKEN);
+  const url = `https://discord.com/api/v10/channels/${channelId}`;
+  const response = UrlFetchApp.fetch(url, {
+    headers: { 'Authorization': 'Bot ' + token },
+    muteHttpExceptions: true
+  });
+  console.log('Status: ' + response.getResponseCode());
+  console.log('Body: ' + response.getContentText());
+}
+
+// 設定スプレッドシートの行を読み込む
+function getConfigRows() {
+  const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('シート「' + CONFIG_SHEET_NAME + '」が見つかりません。');
+  }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return [];
+
+  const rows = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = {};
+    CONFIG_HEADERS.forEach((header, index) => {
+      row[header] = data[i][index];
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// 設定スプレッドシートが存在しない場合は自動作成
+function ensureConfigSpreadsheet() {
+  const existingId = PropertiesService.getScriptProperties().getProperty('configSpreadsheetId');
+  if (existingId) {
+    try {
+      SpreadsheetApp.openById(existingId);
+      return existingId;
+    } catch (e) {
+      console.warn('保存済みのスプレッドシートIDが無効です。再作成します。');
+    }
+  }
+
+  const ss = SpreadsheetApp.create('Discord_Space_Get_Config');
+  const sheet = ss.getSheetByName('Sheet1');
+  if (sheet) {
+    sheet.setName(CONFIG_SHEET_NAME);
+  }
+  sheet.appendRow(CONFIG_HEADERS);
+
+  PropertiesService.getScriptProperties().setProperty('configSpreadsheetId', ss.getId());
+  console.log('設定スプレッドシートを作成しました: ' + ss.getUrl());
+  console.log('Const.gs の CONFIG_SPREADSHEET_ID に以下のIDを設定してください: ' + ss.getId());
+
+  return ss.getId();
+}
+function testDiscordApi() {
+  const token = PropertiesService.getScriptProperties().getProperty('discordBotToken');
+  const url = 'https://discord.com/api/v10/users/@me';
+  const response = UrlFetchApp.fetch(url, {
+    headers: { 'Authorization': 'Bot ' + token },
+    muteHttpExceptions: true
+  });
+  console.log('Status: ' + response.getResponseCode());
+  console.log('Body: ' + response.getContentText());
 }

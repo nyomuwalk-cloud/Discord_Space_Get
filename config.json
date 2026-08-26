@@ -1,0 +1,163 @@
+[
+  {
+    "sourceChannelId": "1234800059099648051",
+    "destChannelId": "1234795863650336799",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "公式"
+  },
+  {
+    "sourceChannelId": "1234800168696676393",
+    "destChannelId": "1234795901361586227",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "うめち"
+  },
+  {
+    "sourceChannelId": "1234800251337179196",
+    "destChannelId": "1234795962464079932",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "すいすい"
+  },
+  {
+    "sourceChannelId": "1234800280952901712",
+    "destChannelId": "1234796002700034118",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "あひる"
+  },
+  {
+    "sourceChannelId": "1234800315295989761",
+    "destChannelId": "1234796049680433182",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "にぃな"
+  },
+  {
+    "sourceChannelId": "1234800376683954227",
+    "destChannelId": "1234796115178688533",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "セレちゃん"
+  },
+  {
+    "sourceChannelId": "1249298419638468639",
+    "destChannelId": "1249297620489470013",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "もるふ"
+  },
+  {
+    "sourceChannelId": "1249298487816753274",
+    "destChannelId": "1249297749111996487",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "おと"
+  },
+  {
+    "sourceChannelId": "1249298525888708741",
+    "destChannelId": "1249297836378685473",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "ライム"
+  },
+  {
+    "sourceChannelId": "1357947981789134864",
+    "destChannelId": "1356948455674740777",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "れむ"
+  },
+  {
+    "sourceChannelId": "1356940068488614039",
+    "destChannelId": "1356948371595722885",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "ののち"
+  },
+  {
+    "sourceChannelId": "1503925766432362546",
+    "destChannelId": "1503928696392781864",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "しゅり"
+  },
+  {
+    "sourceChannelId": "1503925821906354320",
+    "destChannelId": "1503928778550677505",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "アルカナ"
+  },
+  {
+    "sourceChannelId": "1503925876583043155",
+    "destChannelId": "1503928832405536778",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "モニちゃん"
+  },
+  {
+    "sourceChannelId": "1503925924964339893",
+    "destChannelId": "1503928885480259746",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "ぽたち"
+  },
+  {
+    "sourceChannelId": "1365324181394427944",
+    "destChannelId": "1365325744904994916",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "あまちゃん"
+  },
+  {
+    "sourceChannelId": "1412192635459993792",
+    "destChannelId": "1412303849322188931",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "じーた"
+  },
+  {
+    "sourceChannelId": "1411928585685434450",
+    "destChannelId": "1412943596092395610",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "かにみそちゃん"
+  },
+  {
+    "sourceChannelId": "1471286934394638461",
+    "destChannelId": "1471286740328386703",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "クオン"
+  },
+  {
+    "sourceChannelId": "1482624640588320859",
+    "destChannelId": "1482624439446405150",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "りお姉"
+  },
+  {
+    "sourceChannelId": "1483764236411731999",
+    "destChannelId": "1483764328997064815",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "ヒメ"
+  },
+  {
+    "sourceChannelId": "1487798502842040530",
+    "destChannelId": "1487797544393248851",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "つらーら"
+  },
+  {
+    "sourceChannelId": "1529823927415869551",
+    "destChannelId": "1529823766266384494",
+    "destWebhookUrl": "",
+    "enabled": true,
+    "memo": "おとま"
+  }
+]
