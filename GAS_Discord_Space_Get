@@ -66,6 +66,7 @@ function retryOperation(operation, options = {}) {
       return operation();
     } catch (error) {
       lastError = error;
+      console.error(`[DEBUG] retryOperation: ${label} attempt=${attempt}/${maxAttempts} error=${error.message}`);
       if (attempt >= maxAttempts) {
         console.error(`${label}が${maxAttempts}回試行しましたが失敗しました: ${error.message}`);
         throw error;
@@ -87,6 +88,7 @@ function fetchMessages(channelId, afterId, limit) {
   if (afterId) {
     url += `&after=${afterId}`;
   }
+  console.log(`[DEBUG] fetchMessages: channelId=${channelId}, afterId=${afterId || '(none)'}, limit=${limit}`);
 
   const response = retryOperation(() => UrlFetchApp.fetch(url, {
     method: 'get',
@@ -95,15 +97,20 @@ function fetchMessages(channelId, afterId, limit) {
   }), { label: `メッセージ取得(${channelId})` });
 
   const code = response.getResponseCode();
+  console.log(`[DEBUG] fetchMessages: HTTP ${code} channelId=${channelId}`);
   if (code !== 200) {
     throw new Error(`メッセージ取得に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
   }
 
-  return JSON.parse(response.getContentText());
+  const messages = JSON.parse(response.getContentText());
+  console.log(`[DEBUG] fetchMessages: 取得件数=${messages.length} channelId=${channelId}`);
+  return messages;
 }
 
 // 先チャンネルへメッセージを送信（Webhook 経由）
 function sendMessageToWebhook(webhookUrl, payload) {
+  const safeUrl = webhookUrl.replace(/\/[^\/]*$/, '/***');
+  console.log(`[DEBUG] sendMessageToWebhook: url=${safeUrl}, content=${(payload.content || '').slice(0, 80)}`);
   const response = retryOperation(() => UrlFetchApp.fetch(webhookUrl, {
     method: 'post',
     contentType: 'application/json',
@@ -112,6 +119,7 @@ function sendMessageToWebhook(webhookUrl, payload) {
   }), { label: 'Webhook送信' });
 
   const code = response.getResponseCode();
+  console.log(`[DEBUG] sendMessageToWebhook: HTTP ${code}`);
   if (code < 200 || code >= 300) {
     throw new Error(`Webhook送信に失敗しました（HTTP ${code}）: ${response.getContentText().slice(0, 200)}`);
   }
@@ -125,28 +133,26 @@ function sendMessageToWebhook(webhookUrl, payload) {
 // メッセージからスペース情報を抽出。該当しなければ null を返す。
 function detectSpace(message) {
   if (!message) {
+    console.log('[DEBUG] detectSpace: message is null');
     return null;
   }
 
-  // Bot 自身の投稿（転送後のメッセージなど）は無視してループを防ぐ
   if (message.author && message.author.bot === true) {
+    console.log(`[DEBUG] detectSpace: skip bot message id=${message.id}`);
     return null;
   }
 
   const candidates = [];
 
-  // 1) 本文
   if (message.content) {
     candidates.push(message.content);
   }
 
-  // 2) Embed 内の URL / テキスト
   if (Array.isArray(message.embeds)) {
     message.embeds.forEach((embed) => {
       if (embed.url) candidates.push(embed.url);
       if (embed.title) candidates.push(embed.title);
       if (embed.description) candidates.push(embed.description);
-      // 画像・動画のプロキシURLにはスペースIDは含まれないが念のため
       if (embed.author && embed.author.url) candidates.push(embed.author.url);
     });
   }
@@ -157,6 +163,7 @@ function detectSpace(message) {
     if (match) {
       const spaceId = match[1];
       const spaceUrl = `https://x.com/i/spaces/${spaceId}`;
+      console.log(`[DEBUG] detectSpace: matched id=${message.id} spaceId=${spaceId}`);
       return {
         spaceId: spaceId,
         spaceUrl: spaceUrl,
@@ -165,6 +172,7 @@ function detectSpace(message) {
     }
   }
 
+  console.log(`[DEBUG] detectSpace: no match id=${message.id}`);
   return null;
 }
 
@@ -174,18 +182,24 @@ function detectSpace(message) {
 
 function getForwardedCache() {
   const raw = PropertiesService.getScriptProperties().getProperty(PROP_FORWARDED_SPACE_IDS);
-  if (!raw) return [];
+  if (!raw) {
+    console.log('[DEBUG] getForwardedCache: キャッシュなし');
+    return [];
+  }
   try {
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
+    const cache = Array.isArray(arr) ? arr : [];
+    console.log(`[DEBUG] getForwardedCache: 件数=${cache.length}`);
+    return cache;
   } catch (e) {
+    console.warn('[DEBUG] getForwardedCache: パース失敗');
     return [];
   }
 }
 
 function addForwardedCache(cache, messageId) {
   cache.push(messageId);
-  // 古いものから削り、上限以内に保つ
+  console.log(`[DEBUG] addForwardedCache: 追加 messageId=${messageId}, cacheSize=${cache.length}`);
   while (cache.length > SPACE_ID_CACHE_SIZE) {
     cache.shift();
   }
@@ -199,6 +213,7 @@ function addForwardedCache(cache, messageId) {
 function forwardSpaceMessage(message, spaceInfo, destWebhookUrl) {
   const originalText = (message.content && message.content.trim()) ? message.content : spaceInfo.spaceUrl;
   const content = `🎙️ **Xスペース配信**\n${originalText}`;
+  console.log(`[DEBUG] forwardSpaceMessage: spaceUrl=${spaceInfo.spaceUrl}, msgId=${message.id}`);
 
   const payload = {
     content: content,
@@ -215,6 +230,7 @@ function forwardSpaceMessage(message, spaceInfo, destWebhookUrl) {
     payload.username = message.author.username;
   }
   sendMessageToWebhook(destWebhookUrl, payload);
+  console.log(`[DEBUG] forwardSpaceMessage: 送信完了 spaceUrl=${spaceInfo.spaceUrl}`);
 }
 
 // ============================================================
@@ -226,6 +242,7 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
   let afterId = lastMessageId;
   let rowNewestId = lastMessageId;
   let rowForwardCount = forwardCount;
+  console.log(`[DEBUG] processConfigRow: 開始 sourceChannelId=${sourceChannelId}, lastMessageId=${lastMessageId}, forwardCount=${forwardCount}`);
 
   for (let page = 0; page < MAX_FETCH_PAGES; page++) {
     if (!hasEnoughTime(10)) {
@@ -235,8 +252,10 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
 
     const messages = fetchMessages(sourceChannelId, afterId, MAX_FETCH_LIMIT);
     if (!Array.isArray(messages) || messages.length === 0) {
+      console.log(`[DEBUG] processConfigRow: メッセージ0件のため取得終了 page=${page}`);
       break;
     }
+    console.log(`[DEBUG] processConfigRow: page=${page}, 取得件数=${messages.length}`);
 
     rowNewestId = String(messages[messages.length - 1].id);
 
@@ -253,9 +272,10 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
       if (!spaceInfo) {
         continue;
       }
+      console.log(`[DEBUG] processConfigRow: スペース検出 msgId=${msgId}, spaceId=${spaceInfo.spaceId}`);
 
       if (forwardedCache.includes(msgId)) {
-        console.log(`メッセージ ${msgId} は転送済みのためスキップします。`);
+        console.log(`[DEBUG] processConfigRow: 転送済みスキップ msgId=${msgId}`);
         continue;
       }
 
@@ -272,6 +292,7 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
         console.log(`スペースを転送しました: ${spaceInfo.spaceUrl}（メッセージ ${msgId}）`);
         Utilities.sleep(400);
       } catch (error) {
+        console.error(`[DEBUG] processConfigRow: 転送エラー msgId=${msgId}, error=${error.message}`);
         console.error(`スペース転送中にエラーが発生しました（メッセージ ${msgId}）: ${error.message}`);
       }
     }
@@ -282,6 +303,7 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
     afterId = rowNewestId;
   }
 
+  console.log(`[DEBUG] processConfigRow: 完了 newestId=${rowNewestId}, forwardCount=${rowForwardCount}`);
   return {
     newestId: rowNewestId !== lastMessageId ? rowNewestId : lastMessageId,
     forwardCount: rowForwardCount
@@ -289,6 +311,7 @@ function processConfigRow(sourceChannelId, destWebhookUrl, lastMessageId, forwar
 }
 
 function processNewSpaceMessages() {
+  console.log('[DEBUG] processNewSpaceMessages: 開始');
   const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
   const ss = SpreadsheetApp.openById(spreadsheetId);
   const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
@@ -297,12 +320,14 @@ function processNewSpaceMessages() {
   }
 
   const data = sheet.getDataRange().getValues();
+  console.log(`[DEBUG] processNewSpaceMessages: データ行数=${data.length}`);
   if (data.length < 2) {
     console.warn('有効な設定がありません。スプレッドシートを確認してください。');
     return;
   }
 
   const forwardedCache = getForwardedCache();
+  console.log(`[DEBUG] processNewSpaceMessages: 転送済みキャッシュ件数=${forwardedCache.length}`);
   let totalForwardCount = 0;
   let processedAny = false;
 
@@ -313,6 +338,7 @@ function processNewSpaceMessages() {
     });
 
     if (!row.enabled) {
+      console.log(`[DEBUG] processNewSpaceMessages: 行${i + 1}は無効化されています`);
       continue;
     }
     if (!row.sourceChannelId || !row.destWebhookUrl) {
@@ -324,8 +350,7 @@ function processNewSpaceMessages() {
     const sourceChannelId = String(row.sourceChannelId);
     const destWebhookUrl = String(row.destWebhookUrl);
     const rowLastMessageId = row.lastMessageId ? String(row.lastMessageId) : '';
-
-    console.log(`行${i + 1}を処理中: ${sourceChannelId} -> ${destWebhookUrl}`);
+    console.log(`[DEBUG] processNewSpaceMessages: 行${i + 1}を処理中 sourceChannelId=${sourceChannelId}, lastMessageId=${rowLastMessageId}`);
 
     let newestId = rowLastMessageId;
     if (!newestId) {
@@ -350,6 +375,7 @@ function processNewSpaceMessages() {
     }
   }
 
+  console.log(`[DEBUG] processNewSpaceMessages: 完了 totalForwardCount=${totalForwardCount}, processedAny=${processedAny}`);
   console.log(`完了: 新規転送 ${totalForwardCount} 件（処理済み新着: ${processedAny ? 'あり' : 'なし'}）。`);
 }
 
@@ -359,17 +385,21 @@ function processNewSpaceMessages() {
 // ============================================================
 
 function runDiscordSpaceGet() {
+  console.log('[DEBUG] runDiscordSpaceGet: 開始');
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
+    console.log('[DEBUG] runDiscordSpaceGet: ロック取得失敗(既に実行中)');
     console.log('スクリプトは既に実行中です。');
     return;
   }
   try {
     processNewSpaceMessages();
   } catch (e) {
+    console.error('[DEBUG] runDiscordSpaceGet: エラー発生 - ' + e.message);
     console.error('エラーが発生しました: ' + e.message);
   } finally {
     lock.releaseLock();
+    console.log('[DEBUG] runDiscordSpaceGet: ロック解放');
   }
 }
 
@@ -379,6 +409,7 @@ function runDiscordSpaceGet() {
 
 // ブックマークをリセット（次回実行で最新位置のみ再設定）
 function resetBookmark() {
+  console.log('[DEBUG] resetBookmark: 開始');
   const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
   const ss = SpreadsheetApp.openById(spreadsheetId);
   const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
@@ -395,12 +426,14 @@ function resetBookmark() {
 
 // 転送済みキャッシュをクリア
 function clearForwardedCache() {
+  console.log('[DEBUG] clearForwardedCache: 開始');
   PropertiesService.getScriptProperties().deleteProperty(PROP_FORWARDED_SPACE_IDS);
   console.log('転送済みキャッシュをクリアしました。');
 }
 
 // 手動で直近 N 件をテスト転送（ブックマークは変更しない）
 function dryRunRecent(count = 10) {
+  console.log(`[DEBUG] dryRunRecent: 開始 count=${count}`);
   const rows = getConfigRows();
   if (!rows.length) {
     throw new Error('有効な設定がありません。スプレッドシートを確認してください。');
@@ -419,11 +452,13 @@ function dryRunRecent(count = 10) {
       console.log(`[スペース検出] ${info.spaceUrl} | 本文: ${(m.content || '').slice(0, 80)}`);
     }
   });
+  console.log(`[DEBUG] dryRunRecent: 完了 messages=${messages.length}, found=${found}`);
   console.log(`直近 ${messages.length} 件中、スペース投稿は ${found} 件でした（転送は行いません）。`);
 }
 
 // チャンネルへのアクセス権をテスト
 function testChannelAccess() {
+  console.log('[DEBUG] testChannelAccess: 開始');
   const rows = getConfigRows();
   if (!rows.length) {
     throw new Error('有効な設定がありません。スプレッドシートを確認してください。');
@@ -447,6 +482,7 @@ function testChannelAccess() {
 
 // 設定スプレッドシートの行を読み込む
 function getConfigRows() {
+  console.log('[DEBUG] getConfigRows: 開始');
   const spreadsheetId = CONFIG_SPREADSHEET_ID || ensureConfigSpreadsheet();
   const ss = SpreadsheetApp.openById(spreadsheetId);
   const sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
@@ -455,6 +491,7 @@ function getConfigRows() {
   }
 
   const data = sheet.getDataRange().getValues();
+  console.log(`[DEBUG] getConfigRows: データ行数=${data.length}`);
   if (data.length < 2) return [];
 
   const rows = [];
@@ -465,18 +502,21 @@ function getConfigRows() {
     });
     rows.push(row);
   }
+  console.log(`[DEBUG] getConfigRows: 設定行数=${rows.length}`);
   return rows;
 }
 
 // 設定スプレッドシートが存在しない場合は自動作成
 function ensureConfigSpreadsheet() {
+  console.log('[DEBUG] ensureConfigSpreadsheet: 開始');
   const existingId = PropertiesService.getScriptProperties().getProperty('configSpreadsheetId');
   if (existingId) {
     try {
       SpreadsheetApp.openById(existingId);
+      console.log(`[DEBUG] ensureConfigSpreadsheet: 既存使用 id=${existingId}`);
       return existingId;
     } catch (e) {
-      console.warn('保存済みのスプレッドシートIDが無効です。再作成します。');
+      console.warn('[DEBUG] ensureConfigSpreadsheet: 既存IDが無効、再作成します');
     }
   }
 
