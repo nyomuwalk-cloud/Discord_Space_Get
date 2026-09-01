@@ -112,6 +112,8 @@ async function sendChannel(channelId, payload) {
 async function processMessage(message) {
   if (message.author?.bot) return;
 
+  console.log(`[DEBUG] processMessage: 受信 msgId=${message.id} author=${message.author?.username} content=${(message.content || '').slice(0, 120)} embeds=${message.embeds?.length || 0}`);
+
   for (const row of config) {
     if (!row.enabled) continue;
     if (String(message.channelId) !== String(row.sourceChannelId)) continue;
@@ -189,6 +191,15 @@ client.on('messageCreate', async message => {
   } catch (error) {
     console.error(`[DEBUG] messageCreate: エラー ${error.message}`);
     console.error('メッセージ処理中にエラーが発生しました:', error);
+  }
+});
+
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+  try {
+    await processMessage(newMessage);
+  } catch (error) {
+    console.error(`[DEBUG] messageUpdate: エラー ${error.message}`);
+    console.error('メッセージ更新処理中にエラーが発生しました:', error);
   }
 });
 
