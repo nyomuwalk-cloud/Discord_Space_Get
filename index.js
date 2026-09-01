@@ -185,7 +185,22 @@ async function processMessage(message) {
     }
 
     try {
-      const authorName = message.author?.username || row.twitterUsername || 'Unknown';
+      const tweetEmbed = message.embeds?.[0];
+      const tweetUrl = tweetEmbed?.data?.url || tweetEmbed?.url || `https://x.com/${message.author?.username || 'unknown'}/status/${message.id}`;
+      const screenshotUrl = `https://image.thum.io/get/width/1200/crop/800/${encodeURIComponent(tweetUrl)}`;
+
+      let authorName = row.twitterUsername || 'Unknown';
+      const authorUrl = tweetEmbed?.data?.author?.url;
+      if (authorUrl) {
+        const match = authorUrl.match(/https?:\/\/(?:x|twitter)\.com\/([A-Za-z0-9_]+)/);
+        if (match) {
+          authorName = match[1];
+        }
+      }
+      if (authorName === 'Unknown' && message.author?.username) {
+        authorName = message.author.username;
+      }
+
       const rawContent = (message.content && message.content.trim()) ? message.content.trim() : '';
       const cleanedContent = rawContent
         .replace(/https?:\/\/(?:x|twitter)\.com\/i\/spaces\/[A-Za-z0-9_-]+/gi, '')
@@ -193,13 +208,9 @@ async function processMessage(message) {
         .replace(/https?:\/\/(?:x|twitter)\.com\/\w+\/status\/\d+/gi, '')
         .replace(/\n{2,}/g, '\n')
         .trim();
-      const originalText = cleanedContent || spaceInfo.spaceUrl;
+      const displayContent = cleanedContent ? `\n${cleanedContent}` : '';
 
-      const tweetEmbed = message.embeds?.[0];
-      const tweetUrl = tweetEmbed?.data?.url || tweetEmbed?.url || `https://x.com/${authorName}/status/${message.id}`;
-      const screenshotUrl = `https://image.thum.io/get/width/1200/crop/800/${encodeURIComponent(tweetUrl)}`;
-
-      const content = `🎙️ ${authorName}のXスペース配信\n${originalText}\n\n🔗 スペース: ${spaceInfo.spaceUrl}\n🐦 ツイート: ${tweetUrl}`;
+      const content = `🎙️ ${authorName}のXスペース配信${displayContent}\n\n🔗 スペース: ${spaceInfo.spaceUrl}\n🐦 ツイート: ${tweetUrl}`;
 
       const embed = new EmbedBuilder()
         .setTitle(`Xスペースを開く - ${authorName}`)
