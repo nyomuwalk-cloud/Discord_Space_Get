@@ -186,13 +186,20 @@ async function processMessage(message) {
 
     try {
       const authorName = message.author?.username || row.twitterUsername || 'Unknown';
-      const originalText = (message.content && message.content.trim()) ? message.content : spaceInfo.spaceUrl;
+      const rawContent = (message.content && message.content.trim()) ? message.content.trim() : '';
+      const cleanedContent = rawContent
+        .replace(/https?:\/\/(?:x|twitter)\.com\/i\/spaces\/[A-Za-z0-9_-]+/gi, '')
+        .replace(/https?:\/\/t\.co\/[A-Za-z0-9]+/gi, '')
+        .replace(/https?:\/\/(?:x|twitter)\.com\/\w+\/status\/\d+/gi, '')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+      const originalText = cleanedContent || spaceInfo.spaceUrl;
 
       const tweetEmbed = message.embeds?.[0];
       const tweetUrl = tweetEmbed?.data?.url || tweetEmbed?.url || `https://x.com/${authorName}/status/${message.id}`;
       const screenshotUrl = `https://image.thum.io/get/width/1200/crop/800/${encodeURIComponent(tweetUrl)}`;
 
-      const content = `🎙️ **Xスペース配信** by ${authorName}\n${originalText}\n\n🔗 スペース: ${spaceInfo.spaceUrl}\n🐦 ツイート: ${tweetUrl}`;
+      const content = `🎙️ ${authorName}のXスペース配信\n${originalText}\n\n🔗 スペース: ${spaceInfo.spaceUrl}\n🐦 ツイート: ${tweetUrl}`;
 
       const embed = new EmbedBuilder()
         .setTitle(`Xスペースを開く - ${authorName}`)
