@@ -3,6 +3,7 @@ const path = require('path');
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
 const SPACE_URL_REGEX = /https?:\/\/(?:x|twitter)\.com\/i\/spaces\/([A-Za-z0-9_-]+)/i;
+const TCO_URL_REGEX = /https?:\/\/t\.co\/[A-Za-z0-9]+/i;
 const MAX_FORWARD_PER_RUN = 20;
 const SPACE_ID_CACHE_SIZE = 300;
 
@@ -112,6 +113,21 @@ function detectSpace(content, embeds = []) {
       };
     }
   }
+
+  for (const text of candidates) {
+    if (!text) continue;
+    const tcoMatch = text.match(TCO_URL_REGEX);
+    if (tcoMatch) {
+      const tcoUrl = tcoMatch[0];
+      console.log(`[DEBUG] detectSpace: matched tcoUrl=${tcoUrl} source=${text.slice(0, 80)}`);
+      return {
+        spaceId: null,
+        spaceUrl: tcoUrl,
+        sourceText: content || tcoUrl
+      };
+    }
+  }
+
   console.log(`[DEBUG] detectSpace: no match candidates=${candidates.length} content=${String(content).slice(0, 80)}`);
   return null;
 }
