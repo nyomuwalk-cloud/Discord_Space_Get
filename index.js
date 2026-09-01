@@ -79,7 +79,11 @@ function detectSpace(content, embeds = []) {
     if (embed.data && typeof embed.data === 'object') {
       console.log(`[DEBUG] detectSpace: embed[${idx}].data keys=${Object.keys(embed.data).join(',')}`);
       if (embed.data.url) candidates.push(embed.data.url);
-      if (embed.data.description) candidates.push(embed.data.description);
+      if (embed.data.description) {
+        const desc = String(embed.data.description);
+        console.log(`[DEBUG] detectSpace: embed[${idx}].data.description=${desc.slice(0, 200)}`);
+        candidates.push(desc);
+      }
       if (embed.data.footer && embed.data.footer.text) candidates.push(embed.data.footer.text);
       candidates.push(JSON.stringify(embed.data));
     }
