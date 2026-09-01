@@ -78,13 +78,23 @@ function detectSpace(content, embeds = []) {
     }
     if (embed.data && typeof embed.data === 'object') {
       console.log(`[DEBUG] detectSpace: embed[${idx}].data keys=${Object.keys(embed.data).join(',')}`);
-      if (embed.data.url) candidates.push(embed.data.url);
+      if (embed.data.url) {
+        console.log(`[DEBUG] detectSpace: embed[${idx}].data.url=${String(embed.data.url).slice(0, 200)}`);
+        candidates.push(embed.data.url);
+      }
       if (embed.data.description) {
         const desc = String(embed.data.description);
         console.log(`[DEBUG] detectSpace: embed[${idx}].data.description=${desc.slice(0, 200)}`);
         candidates.push(desc);
       }
-      if (embed.data.footer && embed.data.footer.text) candidates.push(embed.data.footer.text);
+      if (embed.data.footer && embed.data.footer.text) {
+        candidates.push(embed.data.footer.text);
+        console.log(`[DEBUG] detectSpace: embed[${idx}].data.footer=${String(embed.data.footer.text).slice(0, 120)}`);
+      }
+      if (embed.data.author && embed.data.author.url) {
+        candidates.push(embed.data.author.url);
+        console.log(`[DEBUG] detectSpace: embed[${idx}].data.author.url=${String(embed.data.author.url).slice(0, 200)}`);
+      }
       candidates.push(JSON.stringify(embed.data));
     }
   });
