@@ -185,21 +185,28 @@ async function processMessage(message) {
     }
 
     try {
+      const authorName = message.author?.username || row.twitterUsername || 'Unknown';
       const originalText = (message.content && message.content.trim()) ? message.content : spaceInfo.spaceUrl;
-      const content = `🎙️ **Xスペース配信**\n${originalText}`;
+
+      const tweetEmbed = message.embeds?.[0];
+      const tweetUrl = tweetEmbed?.data?.url || tweetEmbed?.url || `https://x.com/${authorName}/status/${message.id}`;
+      const screenshotUrl = `https://image.thum.io/get/width/1200/crop/800/${encodeURIComponent(tweetUrl)}`;
+
+      const content = `🎙️ **Xスペース配信** by ${authorName}\n${originalText}\n\n🔗 スペース: ${spaceInfo.spaceUrl}\n🐦 ツイート: ${tweetUrl}`;
 
       const embed = new EmbedBuilder()
-        .setTitle('Xスペースを開く')
+        .setTitle(`Xスペースを開く - ${authorName}`)
         .setURL(spaceInfo.spaceUrl)
         .setColor(0x1da1f2)
+        .setImage(screenshotUrl)
         .toJSON();
 
       const payload = {
+        content: content,
         embeds: [embed]
       };
 
       if (row.destWebhookUrl) {
-        payload.content = content;
         if (row.twitterUsername) {
           payload.username = row.twitterUsername;
           payload.avatarURL = `https://unavatar.io/x/${row.twitterUsername}`;
