@@ -27,8 +27,9 @@ function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
     config = JSON.parse(raw);
-    console.log(`設定を ${config.length} 行読み込みました。`);
+    console.log(`[DEBUG] loadConfig: 設定を ${config.length} 行読み込みました。`);
   } catch (error) {
+    console.error(`[DEBUG] loadConfig: 失敗 ${error.message}`);
     console.error('config.json の読み込みに失敗しました:', error.message);
     process.exit(1);
   }
@@ -38,6 +39,7 @@ function loadState() {
   try {
     const raw = fs.readFileSync(STATE_PATH, 'utf8');
     state = JSON.parse(raw);
+    console.log(`[DEBUG] loadState: state読み込み完了 cache=${state.forwardedCache?.length ?? 0}`);
   } catch (error) {
     console.log('state.json が存在しないため、新規作成します。');
     state = { forwardedCache: [], lastMessageId: {} };
@@ -48,7 +50,9 @@ function loadState() {
 function saveState() {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+    console.log(`[DEBUG] saveState: cache=${state.forwardedCache?.length ?? 0}`);
   } catch (error) {
+    console.error(`[DEBUG] saveState: 失敗 ${error.message}`);
     console.error('state.json の保存に失敗しました:', error.message);
   }
 }
@@ -67,6 +71,7 @@ function detectSpace(content, embeds = []) {
     const match = text.match(SPACE_URL_REGEX);
     if (match) {
       const spaceId = match[1];
+      console.log(`[DEBUG] detectSpace: matched spaceId=${spaceId}`);
       return {
         spaceId,
         spaceUrl: `https://x.com/i/spaces/${spaceId}`,
@@ -78,6 +83,8 @@ function detectSpace(content, embeds = []) {
 }
 
 async function sendWebhook(webhookUrl, payload) {
+  const safeUrl = webhookUrl.replace(/\/[^\/]*$/, '/***');
+  console.log(`[DEBUG] sendWebhook: url=${safeUrl}`);
   const response = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -86,16 +93,20 @@ async function sendWebhook(webhookUrl, payload) {
 
   if (!response.ok) {
     const text = await response.text();
+    console.error(`[DEBUG] sendWebhook: HTTP ${response.status}`);
     throw new Error(`Webhook送信に失敗しました（HTTP ${response.status}）: ${text.slice(0, 200)}`);
   }
+  console.log(`[DEBUG] sendWebhook: HTTP ${response.status}`);
 }
 
 async function sendChannel(channelId, payload) {
+  console.log(`[DEBUG] sendChannel: channelId=${channelId}`);
   const channel = await client.channels.fetch(channelId);
   if (!channel) {
     throw new Error(`チャンネルが見つかりません: ${channelId}`);
   }
   await channel.send(payload);
+  console.log(`[DEBUG] sendChannel: 送信完了 channelId=${channelId}`);
 }
 
 async function processMessage(message) {
@@ -110,8 +121,10 @@ async function processMessage(message) {
     if (!spaceInfo) continue;
 
     const msgId = String(message.id);
+    console.log(`[DEBUG] processMessage: スペース検出 msgId=${msgId} spaceId=${spaceInfo.spaceId}`);
+
     if (state.forwardedCache.includes(msgId)) {
-      console.log(`メッセージ ${msgId} は転送済みのためスキップします。`);
+      console.log(`[DEBUG] processMessage: 転送済みスキップ msgId=${msgId}`);
       continue;
     }
 
@@ -152,8 +165,9 @@ async function processMessage(message) {
 
       state.forwardedCache.push(msgId);
       saveState();
-      console.log(`スペースを転送しました: ${spaceInfo.spaceUrl}（メッセージ ${msgId}）`);
+      console.log(`[DEBUG] processMessage: 転送完了 spaceUrl=${spaceInfo.spaceUrl} msgId=${msgId}`);
     } catch (error) {
+      console.error(`[DEBUG] processMessage: 転送エラー msgId=${msgId}, error=${error.message}`);
       console.error(`スペース転送中にエラーが発生しました（メッセージ ${msgId}）: ${error.message}`);
     }
 
@@ -173,25 +187,30 @@ client.on('messageCreate', async message => {
   try {
     await processMessage(message);
   } catch (error) {
+    console.error(`[DEBUG] messageCreate: エラー ${error.message}`);
     console.error('メッセージ処理中にエラーが発生しました:', error);
   }
 });
 
 async function main() {
+  console.log('[DEBUG] main: 開始');
   fs.mkdirSync(DATA_DIR, { recursive: true });
   loadConfig();
   loadState();
 
   await client.login(discordToken);
+  console.log('[DEBUG] main: Botログイン完了');
   console.log('Botが起動しました。');
 }
 
 main().catch(error => {
+  console.error(`[DEBUG] main: 起動失敗 ${error.message}`);
   console.error('Botの起動に失敗しました:', error);
   process.exit(1);
 });
 
 process.on('SIGINT', async () => {
+  console.log('[DEBUG] SIGINT: 停止開始');
   console.log('Botを停止しています...');
   await client.destroy();
   process.exit(0);
