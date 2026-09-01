@@ -59,11 +59,23 @@ function saveState() {
 
 function detectSpace(content, embeds = []) {
   const candidates = [content];
-  embeds.forEach(embed => {
+  embeds.forEach((embed, idx) => {
+    console.log(`[DEBUG] detectSpace: embed[${idx}] keys=${Object.keys(embed).join(',')}`);
     if (embed.url) candidates.push(embed.url);
     if (embed.title) candidates.push(embed.title);
     if (embed.description) candidates.push(embed.description);
     if (embed.author && embed.author.url) candidates.push(embed.author.url);
+    if (Array.isArray(embed.fields)) {
+      embed.fields.forEach((field, i) => {
+        if (field.value) candidates.push(field.value);
+        if (field.name) candidates.push(field.name);
+        console.log(`[DEBUG] detectSpace: embed[${idx}].fields[${i}] name=${field.name} value=${String(field.value).slice(0, 80)}`);
+      });
+    }
+    if (embed.footer && embed.footer.text) {
+      candidates.push(embed.footer.text);
+      console.log(`[DEBUG] detectSpace: embed[${idx}].footer=${embed.footer.text.slice(0, 120)}`);
+    }
   });
 
   for (const text of candidates) {
@@ -71,7 +83,7 @@ function detectSpace(content, embeds = []) {
     const match = text.match(SPACE_URL_REGEX);
     if (match) {
       const spaceId = match[1];
-      console.log(`[DEBUG] detectSpace: matched spaceId=${spaceId}`);
+      console.log(`[DEBUG] detectSpace: matched spaceId=${spaceId} source=${text.slice(0, 80)}`);
       return {
         spaceId,
         spaceUrl: `https://x.com/i/spaces/${spaceId}`,
@@ -79,6 +91,7 @@ function detectSpace(content, embeds = []) {
       };
     }
   }
+  console.log(`[DEBUG] detectSpace: no match candidates=${candidates.length} content=${String(content).slice(0, 80)}`);
   return null;
 }
 
