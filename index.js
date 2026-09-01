@@ -76,6 +76,10 @@ function detectSpace(content, embeds = []) {
       candidates.push(embed.footer.text);
       console.log(`[DEBUG] detectSpace: embed[${idx}].footer=${embed.footer.text.slice(0, 120)}`);
     }
+    if (embed.data && typeof embed.data === 'object') {
+      console.log(`[DEBUG] detectSpace: embed[${idx}].data keys=${Object.keys(embed.data).join(',')}`);
+      candidates.push(JSON.stringify(embed.data));
+    }
   });
 
   for (const text of candidates) {
