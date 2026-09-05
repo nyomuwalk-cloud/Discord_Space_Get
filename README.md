@@ -99,7 +99,7 @@ AI が `config.json` を更新するので、そのファイルを Git にプッ
 
 ### ブックマークをリセットする場合
 
-`state.json` の `lastMessageId` を削除するか、Northflank のボリュームから `state.json` を削除。
+Northflank のボリュームから `state.json` を削除してください。
 
 ## 制限事項
 

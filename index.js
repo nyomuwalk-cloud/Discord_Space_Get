@@ -4,11 +4,11 @@ const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
 const SPACE_URL_REGEX = /https?:\/\/(?:x|twitter)\.com\/i\/spaces\/([A-Za-z0-9_-]+)/i;
 const TCO_URL_REGEX = /https?:\/\/t\.co\/[A-Za-z0-9]+/i;
-const MAX_FORWARD_PER_RUN = 20;
 const SPACE_ID_CACHE_SIZE = 300;
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
-const STATE_PATH = path.join(__dirname, 'state.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const STATE_PATH = path.join(DATA_DIR, 'state.json');
 
 const discordToken = process.env.DISCORD_BOT_TOKEN;
 
@@ -26,7 +26,29 @@ let state = {
 function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    config = JSON.parse(raw);
+    const parsedConfig = JSON.parse(raw);
+    if (!Array.isArray(parsedConfig)) {
+      throw new Error('設定は配列で指定してください。');
+    }
+    parsedConfig.forEach((row, index) => {
+      if (!row || !row.sourceChannelId) {
+        throw new Error(`設定 ${index + 1} 行目に sourceChannelId がありません。`);
+      }
+      if (!row.destWebhookUrl && !row.destChannelId) {
+        throw new Error(`設定 ${index + 1} 行目に転送先がありません。`);
+      }
+      if (row.destWebhookUrl) {
+        try {
+          const webhookUrl = new URL(row.destWebhookUrl);
+          if (webhookUrl.protocol !== 'https:' || webhookUrl.hostname !== 'discord.com') {
+            throw new Error('Discord Webhook URLではありません。');
+          }
+        } catch (error) {
+          throw new Error(`設定 ${index + 1} 行目の destWebhookUrl が不正です。`);
+        }
+      }
+    });
+    config = parsedConfig;
     console.log(`[DEBUG] loadConfig: 設定を ${config.length} 行読み込みました。`);
   } catch (error) {
     console.error(`[DEBUG] loadConfig: 失敗 ${error.message}`);
@@ -38,11 +60,17 @@ function loadConfig() {
 function loadState() {
   try {
     const raw = fs.readFileSync(STATE_PATH, 'utf8');
-    state = JSON.parse(raw);
+    const parsedState = JSON.parse(raw);
+    if (!parsedState || !Array.isArray(parsedState.forwardedCache)) {
+      throw new Error('forwardedCache が配列ではありません。');
+    }
+    state = {
+      forwardedCache: parsedState.forwardedCache
+    };
     console.log(`[DEBUG] loadState: state読み込み完了 cache=${state.forwardedCache?.length ?? 0}`);
   } catch (error) {
     console.log('state.json が存在しないため、新規作成します。');
-    state = { forwardedCache: [], lastMessageId: {} };
+    state = { forwardedCache: [] };
     saveState();
   }
 }
@@ -57,7 +85,7 @@ function saveState() {
   }
 }
 
-function detectSpace(content, embeds = []) {
+async function detectSpace(content, embeds = []) {
   const candidates = [content];
   embeds.forEach((embed, idx) => {
     console.log(`[DEBUG] detectSpace: embed[${idx}] keys=${Object.keys(embed).join(',')}`);
@@ -118,12 +146,25 @@ function detectSpace(content, embeds = []) {
     const tcoMatch = text.match(TCO_URL_REGEX);
     if (tcoMatch) {
       const tcoUrl = tcoMatch[0];
-      console.log(`[DEBUG] detectSpace: matched tcoUrl=${tcoUrl} source=${text.slice(0, 80)}`);
-      return {
-        spaceId: null,
-        spaceUrl: tcoUrl,
-        sourceText: content || tcoUrl
-      };
+      try {
+        const response = await fetch(tcoUrl, {
+          method: 'HEAD',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(5000)
+        });
+        const finalUrl = response.url;
+        const spaceMatch = finalUrl.match(SPACE_URL_REGEX);
+        if (spaceMatch) {
+          console.log(`[DEBUG] detectSpace: resolved tcoUrl=${tcoUrl} spaceId=${spaceMatch[1]}`);
+          return {
+            spaceId: spaceMatch[1],
+            spaceUrl: `https://x.com/i/spaces/${spaceMatch[1]}`,
+            sourceText: content || tcoUrl
+          };
+        }
+      } catch (error) {
+        console.log(`[DEBUG] detectSpace: tcoUrl解決失敗 url=${tcoUrl} error=${error.message}`);
+      }
     }
   }
 
@@ -161,30 +202,36 @@ async function sendChannel(channelId, payload) {
 async function processMessage(message) {
   if (message.author?.bot) return;
 
-  console.log(`[DEBUG] processMessage: 受信 msgId=${message.id} author=${message.author?.username} content=${(message.content || '').slice(0, 120)} embeds=${message.embeds?.length || 0}`);
+  const isSourceChannel = config.some(row =>
+    row.enabled !== false &&
+    String(message.channelId) === String(row.sourceChannelId)
+  );
+  if (!isSourceChannel) return;
 
-  for (const row of config) {
-    if (!row.enabled) continue;
+  console.log(`[DEBUG] processMessage: 受信 channelId=${message.channelId} msgId=${message.id} author=${message.author?.username} content=${(message.content || '').slice(0, 120)} embeds=${message.embeds?.length || 0}`);
+
+  for (const [rowIndex, row] of config.entries()) {
+    if (row.enabled === false) continue;
     if (String(message.channelId) !== String(row.sourceChannelId)) continue;
     if (!row.destWebhookUrl && !row.destChannelId) continue;
 
-    const spaceInfo = detectSpace(message.content, message.embeds || []);
+    const spaceInfo = await detectSpace(message.content, message.embeds || []);
     if (!spaceInfo) continue;
 
     const msgId = String(message.id);
     console.log(`[DEBUG] processMessage: スペース検出 msgId=${msgId} spaceId=${spaceInfo.spaceId}`);
 
-    if (state.forwardedCache.includes(msgId)) {
+    const cacheKey = `${msgId}:${rowIndex}`;
+    if (state.forwardedCache.includes(cacheKey)) {
       console.log(`[DEBUG] processMessage: 転送済みスキップ msgId=${msgId}`);
       continue;
     }
 
-    if (state.forwardedCache.length >= SPACE_ID_CACHE_SIZE) {
-      state.forwardedCache.shift();
-    }
-
     try {
-      const tweetEmbed = message.embeds?.[0];
+      const tweetEmbed = message.embeds?.find(embed => {
+        const embedUrl = embed?.data?.url || embed?.url || '';
+        return /https?:\/\/(?:x|twitter)\.com\/[^/]+\/status\/\d+/i.test(embedUrl);
+      }) || message.embeds?.[0];
       const tweetUrl = tweetEmbed?.data?.url || tweetEmbed?.url || `https://x.com/${message.author?.username || 'unknown'}/status/${message.id}`;
       const screenshotUrl = `https://image.thum.io/get/width/1200/crop/800/${encodeURIComponent(tweetUrl)}`;
 
@@ -226,10 +273,10 @@ async function processMessage(message) {
       if (row.destWebhookUrl) {
         if (row.twitterUsername) {
           payload.username = row.twitterUsername;
-          payload.avatarURL = `https://unavatar.io/x/${row.twitterUsername}`;
+          payload.avatar_url = `https://unavatar.io/x/${row.twitterUsername}`;
         } else {
           payload.username = message.author.username;
-          payload.avatarURL = message.author.displayAvatarURL();
+          payload.avatar_url = message.author.displayAvatarURL();
         }
         await sendWebhook(row.destWebhookUrl, payload);
       } else {
@@ -239,7 +286,10 @@ async function processMessage(message) {
         });
       }
 
-      state.forwardedCache.push(msgId);
+      if (state.forwardedCache.length >= SPACE_ID_CACHE_SIZE) {
+        state.forwardedCache.shift();
+      }
+      state.forwardedCache.push(cacheKey);
       saveState();
       console.log(`[DEBUG] processMessage: 転送完了 spaceUrl=${spaceInfo.spaceUrl} msgId=${msgId}`);
     } catch (error) {
@@ -247,7 +297,6 @@ async function processMessage(message) {
       console.error(`スペース転送中にエラーが発生しました（メッセージ ${msgId}）: ${error.message}`);
     }
 
-    break;
   }
 }
 
@@ -294,9 +343,12 @@ main().catch(error => {
   process.exit(1);
 });
 
-process.on('SIGINT', async () => {
-  console.log('[DEBUG] SIGINT: 停止開始');
+async function shutdown(signal) {
+  console.log(`[DEBUG] ${signal}: 停止開始`);
   console.log('Botを停止しています...');
   await client.destroy();
   process.exit(0);
-});
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
