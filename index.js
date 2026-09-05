@@ -9,6 +9,25 @@ const SPACE_ID_CACHE_SIZE = 300;
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+const JST_TIME_ZONE = 'Asia/Tokyo';
+
+function formatJstTimestamp() {
+  return new Intl.DateTimeFormat('ja-JP', {
+    timeZone: JST_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date());
+}
+
+const originalConsoleLog = console.log.bind(console);
+const originalConsoleError = console.error.bind(console);
+console.log = (...args) => originalConsoleLog(`[JST ${formatJstTimestamp()}]`, ...args);
+console.error = (...args) => originalConsoleError(`[JST ${formatJstTimestamp()}]`, ...args);
 
 const discordToken = process.env.DISCORD_BOT_TOKEN;
 
