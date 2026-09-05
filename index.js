@@ -7,9 +7,8 @@ const TCO_URL_REGEX = /https?:\/\/t\.co\/[A-Za-z0-9]+/i;
 const MAX_FORWARD_PER_RUN = 20;
 const SPACE_ID_CACHE_SIZE = 300;
 
-const DATA_DIR = process.env.DATA_DIR || '/data';
 const CONFIG_PATH = path.join(__dirname, 'config.json');
-const STATE_PATH = path.join(DATA_DIR, 'state.json');
+const STATE_PATH = path.join(__dirname, 'state.json');
 
 const discordToken = process.env.DISCORD_BOT_TOKEN;
 
